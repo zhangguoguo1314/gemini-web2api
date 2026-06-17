@@ -1,3 +1,8 @@
+---
+title: Gemini Web2API
+sdk: docker
+app_port: 8081
+---
 # gemini-web2api
 
 <p align="center">
