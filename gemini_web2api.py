@@ -32,6 +32,7 @@ import os
 import hashlib
 import argparse
 import base64
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -58,10 +59,28 @@ DEFAULT_CONFIG = {
     "log_requests": True,
     "cookie_file": None,
     "proxy": None,
+    "proxy_pool": [],
+    "proxy_strategy": "round_robin",
     "api_keys": [],
 }
 
 CONFIG = dict(DEFAULT_CONFIG)
+
+# ─── Proxy Pool ──────────────────────────────────────────────────────────────
+_proxy_idx = 0
+
+def get_proxy() -> str | None:
+    """从代理池中获取一个代理，支持 round_robin 和 random 策略。"""
+    pool = CONFIG.get("proxy_pool") or []
+    if not pool:
+        return CONFIG.get("proxy")
+    strategy = CONFIG.get("proxy_strategy", "round_robin")
+    if strategy == "random":
+        return random.choice(pool)
+    global _proxy_idx
+    proxy = pool[_proxy_idx % len(pool)]
+    _proxy_idx += 1
+    return proxy
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Mapping from JS source: MODE_CATEGORY enum (028-6eb337387583.js)
@@ -194,18 +213,24 @@ def gemini_stream_generate(prompt: str, model_id: int, think_mode: int) -> str:
     last_err = None
     for attempt in range(CONFIG["retry_attempts"]):
         try:
-            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-            ctx = ssl.create_default_context()
-            proxy = CONFIG.get("proxy")
-            if proxy:
-                opener = urllib.request.build_opener(
-                    urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
-                    urllib.request.HTTPSHandler(context=ctx)
-                )
-                resp = opener.open(req, timeout=CONFIG["request_timeout_sec"])
+            proxy = get_proxy()
+            if HAS_HTTPX:
+                transport = httpx.HTTPTransport(proxy=proxy) if proxy else None
+                with httpx.Client(transport=transport, timeout=CONFIG["request_timeout_sec"], verify=True) as client:
+                    resp = client.post(url, content=body, headers=headers)
+                    return resp.text
             else:
-                resp = urllib.request.urlopen(req, context=ctx, timeout=CONFIG["request_timeout_sec"])
-            return resp.read().decode("utf-8", errors="replace")
+                req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+                ctx = ssl.create_default_context()
+                if proxy:
+                    opener = urllib.request.build_opener(
+                        urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+                        urllib.request.HTTPSHandler(context=ctx)
+                    )
+                    resp = opener.open(req, timeout=CONFIG["request_timeout_sec"])
+                else:
+                    resp = urllib.request.urlopen(req, context=ctx, timeout=CONFIG["request_timeout_sec"])
+                return resp.read().decode("utf-8", errors="replace")
         except Exception as e:
             last_err = e
             if attempt < CONFIG["retry_attempts"] - 1:
@@ -262,7 +287,7 @@ def gemini_stream_generate_iter(prompt: str, model_id: int, think_mode: int):
     if sapisid:
         headers["Authorization"] = make_sapisidhash(sapisid)
 
-    proxy = CONFIG.get("proxy")
+    proxy = get_proxy()
 
     if not HAS_HTTPX:
         # Fallback: non-streaming with urllib
@@ -829,12 +854,14 @@ def main():
 
     port = CONFIG["port"]
     server = ThreadedServer((CONFIG["host"], port), GeminiHandler)
+    pool = CONFIG.get("proxy_pool") or []
+    proxy_info = f"pool {len(pool)} proxies ({CONFIG.get('proxy_strategy', 'round_robin')})" if pool else (CONFIG.get('proxy') or 'none (uses system env HTTP_PROXY/HTTPS_PROXY)')
     print(f"gemini-web2api v{__version__}")
     print(f"  Listening: http://0.0.0.0:{port}")
     print(f"  Base URL:  http://localhost:{port}/v1")
     print(f"  Models:    {', '.join(MODELS.keys())}")
     print(f"  Cookie:    {'yes (' + CONFIG['cookie_file'] + ')' if CONFIG.get('cookie_file') else 'none (anonymous)'}")
-    print(f"  Proxy:     {CONFIG.get('proxy') or 'none (uses system env HTTP_PROXY/HTTPS_PROXY)'}")
+    print(f"  Proxy:     {proxy_info}")
     print(f"  Retry:     {CONFIG['retry_attempts']}x / {CONFIG['retry_delay_sec']}s")
     print()
     try:
