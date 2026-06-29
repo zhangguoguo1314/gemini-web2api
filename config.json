@@ -8,8 +8,16 @@
   "auth_user": null,
   "xsrf_token": null,
   "default_model": "gemini-3.5-flash",
-  "api_keys": [],
+  "log_requests": true,
   "cookie_file": null,
   "proxy": null,
-  "log_requests": true
+  "proxy_pool": [
+    "socks5://fchgaliv:80vyno3p9gsm@38.154.185.97:6370",
+    "socks5://zqbzmbqq:9m8moeohthyf@2.57.21.2:7239",
+    "socks5://hzthvvle:clzzfrpaq308@209.127.138.10:5784",
+    "socks5://qwricdqx:zwvicna5hc52@38.154.182.96:7364",
+    "socks5://fchgaliv:80vyno3p9gsm@38.154.203.95:5863"
+  ],
+  "proxy_strategy": "round_robin",
+  "api_keys": []
 }
